@@ -1,171 +1,121 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="utf-8" />
-  <title>Meet Chat Add-on (Frontend + Firebase)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <style>
-    body { font-family: system-ui, Arial; margin:0; padding:12px; box-sizing:border-box; }
-    #messages { height: 300px; overflow:auto; border:1px solid #ddd; padding:8px; margin-bottom:8px; background:#fafafa; }
-    .msg { margin:6px 0; padding:6px; border-radius:6px; max-width:80%; }
-    .me { background:#dff0ea; margin-left:auto; }
-    .other { background:#f1f3f5; margin-right:auto; }
-    #status { font-size:12px; color:#666; margin-bottom:8px; }
-    #composer { display:flex; gap:8px; }
-    #text { flex:1; padding:8px; }
-    button { padding:8px 12px; }
-  </style>
-  <!-- Meet Add-ons SDK -->
-  <script src="https://www.gstatic.com/meetjs/addons/1.1.0/meet.addons.js"></script>
-</head>
-<body>
-  <h3>會議聊天室（即時）</h3>
-  <div id="status">初始化中…</div>
-  <div id="messages"></div>
+<meta charset="utf-8" />
+<title>Google Meet Chat Add-on</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
 
-  <div id="composer">
-    <input id="text" placeholder="輸入訊息，按 Enter 傳送" />
-    <button id="send">傳送</button>
-  </div>
+<style>
+  body { font-family: Arial; padding:12px; background:#fafafa; }
+  #status { font-size:12px; margin-bottom:6px; color:#666; }
+  #messages { height:280px; overflow:auto; border:1px solid #ddd; padding:8px; background:white; margin-bottom:10px; }
+  .msg { margin:6px 0; padding:6px; border-radius:6px; max-width:80%; }
+  .me { background:#d8f7e8; margin-left:auto; }
+  .other { background:#ececec; margin-right:auto; }
 
-  <script type="module">
-    // --------------- 把下面 firebaseConfig 換成你自己的 ---------------
-    const firebaseConfig = {
-      apiKey: "YOUR_API_KEY",
-      authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-      projectId: "YOUR_PROJECT_ID",
-      // storageBucket, messagingSenderId, appId 可選
+  #composer { display:flex; gap:6px; }
+  input { flex:1; padding:8px; border-radius:6px; border:1px solid #ccc; }
+  button { padding:8px 14px; border-radius:6px; border:none; background:#409eff; color:white; }
+</style>
+
+<script src="https://www.gstatic.com/meetjs/addons/1.1.0/meet.addons.js"></script>
+<script type="module">
+
+/* -------------------------------------------------
+ 🔥 需自行替換 (Firebase 專案)
+---------------------------------------------------*/
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID"
+};
+
+/* -------------------------------------------------
+ 🔥 必填 (Google Cloud Project Number)
+ ⚠️ 沒填會直接報 401
+---------------------------------------------------*/
+const CLOUD_PROJECT_NUMBER = "YOUR_GCP_PROJECT_NUMBER"; // ← 要改
+
+/* ----------------- Firebase ------------------- */
+import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+import { getFirestore, collection, addDoc, query, orderBy, onSnapshot } 
+from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+/* ----------------- UI Elements ---------------- */
+const statusEl   = document.getElementById("status");
+const messagesEl = document.getElementById("messages");
+const inputEl    = document.createElement("input");
+const sendBtn    = document.createElement("button");
+
+sendBtn.textContent = "發送";
+
+/* ----------------- 建立 Add-on Session ---------------- */
+async function initMeetContext() {
+  try {
+    const session = await meet.addon.createAddonSession({
+      cloudProjectNumber: 504590536903
+    });
+
+    const client = session.createSidePanelClient();
+
+    const meeting = await client.getMeeting();
+    const user    = await client.getLocalParticipant();
+
+    return {
+      meetingId: meeting.meetingId,
+      userName:  user.displayName || "未知使用者"
     };
-    // -----------------------------------------------------------------
+  } catch (e) {
+    alert("❗ Add-on 未在 Google Meet 內執行\n請先從 Meet 加載外掛");
+    throw e;
+  }
+}
 
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
-    import {
-      getFirestore, collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, limit
-    } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
+/* ----------------- 主要啟動 ---------------- */
+(async () => {
+  const { meetingId, userName } = await initMeetContext();
 
-    // DOM
-    const statusEl = document.getElementById("status");
-    const messagesEl = document.getElementById("messages");
-    const inputEl = document.getElementById("text");
-    const sendBtn = document.getElementById("send");
+  statusEl.textContent = `會議：${meetingId}｜使用者：${userName}`;
 
-    // Firebase init
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
+  const roomRef = collection(db, "rooms", meetingId, "messages");
+  const q = query(roomRef, orderBy("ts"));
 
-    // Utility: render message
-    function renderMessage(data, isMe) {
+  onSnapshot(q, snap => {
+    messagesEl.innerHTML = "";
+    snap.forEach(d => {
+      const msg = d.data();
       const el = document.createElement("div");
-      el.className = "msg " + (isMe ? "me" : "other");
-      el.innerHTML = `<strong>${escapeHtml(data.user || "匿名")}</strong><div>${escapeHtml(data.text)}</div><div style="font-size:10px;color:#666;margin-top:4px">${new Date(data.ts).toLocaleTimeString()}</div>`;
+      el.className = "msg " + (msg.user===userName ? "me":"other");
+      el.innerHTML = `<b>${msg.user}</b><br>${msg.text}`;
       messagesEl.appendChild(el);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-    }
-    function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    });
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  });
 
-    // Attempt to get meetingId & user info from Meet Add-ons SDK
-    async function getMeetContextFallback() {
-      try {
-        // create session MUST be called before clients
-        await meet.addon.createAddonSession({
-          cloudProjectNumber: "504590536903"
-        });
-      } catch (e) {
-        console.warn("createAddonSession failed (ok for local test):", e);
-      }
+  sendBtn.onclick = async () => {
+    const txt = inputEl.value.trim();
+    if (!txt) return;
+    inputEl.value = "";
+    addDoc(roomRef, {
+      user: userName,
+      text: txt,
+      ts: Date.now()
+    });
+  };
 
-      let meetingId = null;
-      let userDisplay = "我";
+})();
 
-      try {
-        // try create side panel client (works when loaded inside Meet)
-        const sidePanelClient = await meet.addon.createSidePanelClient();
-        // getMeeting may or may not be supported depending on SDK version; try gracefully
-        if (sidePanelClient.getMeeting) {
-          const meeting = await sidePanelClient.getMeeting();
-          if (meeting && meeting.meetingId) meetingId = meeting.meetingId;
-        }
-        // getParticipant to know current user name if available
-        if (sidePanelClient.getCurrentParticipant) {
-          const p = await sidePanelClient.getCurrentParticipant();
-          if (p && p.displayName) userDisplay = p.displayName;
-        }
-      } catch (err) {
-        console.warn("Meet client methods not available:", err);
-      }
+document.body.appendChild(statusEl);
+document.body.appendChild(messagesEl);
+document.body.appendChild(Object.assign(document.createElement("div"),{
+  id:"composer",
+  appendChild(){ this.append(inputEl,sendBtn); return this }
+}).appendChild());
 
-      // fallback: try global meet context (older/newer SDK differences)
-      try {
-        if (!meetingId && window.meet && meet.addon && meet.addon.getMeeting) {
-          const m = await meet.addon.getMeeting();
-          if (m && m.meetingId) meetingId = m.meetingId;
-        }
-      } catch(e){ /* ignore */ }
-
-      return { meetingId, userDisplay };
-    }
-
-    // main
-    (async () => {
-      statusEl.textContent = "嘗試從 Meet 取得會議資訊…";
-
-      const ctx = await getMeetContextFallback();
-      let meetingId = ctx.meetingId;
-      const userDisplay = ctx.userDisplay || "我";
-
-      if (!meetingId) {
-        // fallback: ask user 輸入房間代碼（方便在本地測試）
-        meetingId = prompt("無法自動取得 meetingId，請輸入房間 ID（或任意字串，用於本地測試）:");
-      }
-
-      if (!meetingId) {
-        statusEl.textContent = "找不到 meetingId，無法啟動聊天室。";
-        return;
-      }
-
-      statusEl.textContent = `房間： ${meetingId}，使用者：${userDisplay}`;
-
-      // Firestore collection path
-      const roomCol = collection(db, "rooms", meetingId, "messages");
-      const q = query(roomCol, orderBy("ts"));
-
-      // Listen in realtime
-      onSnapshot(q, (snap) => {
-        // clear and re-render (簡單處理)
-        messagesEl.innerHTML = "";
-        snap.forEach(doc => {
-          const d = doc.data();
-          const isMe = (d.user === userDisplay);
-          renderMessage(d, isMe);
-        });
-      }, (err) => {
-        console.error("onSnapshot error", err);
-        statusEl.textContent = "Realtime update error: " + (err.message || err);
-      });
-
-      // send message
-      async function sendMessage() {
-        const text = inputEl.value.trim();
-        if (!text) return;
-        inputEl.value = "";
-        try {
-          await addDoc(roomCol, {
-            text,
-            user: userDisplay,
-            ts: Date.now() // client ts; Firestore serverTimestamp could be used instead
-          });
-        } catch (e) {
-          console.error("send failed", e);
-          alert("傳送失敗：" + (e.message || e));
-        }
-      }
-
-      sendBtn.onclick = sendMessage;
-      inputEl.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") sendMessage();
-      });
-
-    })();
-  </script>
-</body>
+</script>
+</head>
+<body></body>
 </html>
