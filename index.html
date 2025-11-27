@@ -56,7 +56,7 @@ sendBtn.textContent = "發送";
 async function initMeetContext() {
   try {
     const session = await meet.addon.createAddonSession({
-      cloudProjectNumber: 504590536903
+      cloudProjectNumber: "504590536903"
     });
 
     const client = session.createSidePanelClient();
